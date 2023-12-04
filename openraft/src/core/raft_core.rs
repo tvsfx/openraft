@@ -259,7 +259,9 @@ where
     /// Why:
     /// To ensure linearizability, a read request proposed at time `T1` confirms this node's
     /// leadership to guarantee that all the committed entries proposed before `T1` are present in
-    /// this node.
+    /// this node. Additionally, to ensure that we do not disregard entries that were committed in
+    /// prior terms without this leader knowing, we require that the leader has committed at least
+    /// one entry in its current term.
     // TODO: the second condition is such a read request can only read from state machine only when the last log it sees
     //       at `T1` is committed.
     #[tracing::instrument(level = "trace", skip(self, tx))]
@@ -274,6 +276,23 @@ where
         let ttl = Duration::from_millis(self.config.heartbeat_interval);
         let eff_mem = self.engine.state.membership_state.effective().clone();
         let core_tx = self.tx_notify.clone();
+
+        // Check whether at least this leader's blank entry has been committed
+        let check_has_commit = || {
+            let my_vote_id = my_vote.leader_id.to_committed();
+            let my_commit_id = self.engine.state.committed().copied();
+            match my_commit_id {
+                None => false,
+                Some(log_id) => my_vote_id == *log_id.committed_leader_id(),
+            }
+        };
+
+        if !check_has_commit() {
+            //TODO: come up with new type of error, like `NoCommitError`?
+            let err = ForwardToLeader::empty();
+            let _ = tx.send(Err(err.into()));
+            return;
+        }
 
         let mut granted = btreeset! {my_id};
 
