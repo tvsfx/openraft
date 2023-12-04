@@ -1,6 +1,7 @@
 
 # Directory Ignores ##########################################################
 guide/book
+tests/_log
 target
 vendor
 .idea
